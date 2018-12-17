@@ -41,7 +41,6 @@ func setup(c *caddy.Controller) error {
 func Parse(c *caddy.Controller) (*Kubernetai, error) {
 	var k8i = &Kubernetai{
 		autoPathSearch: searchFromResolvConf(),
-		p:              &podHandler{},
 	}
 	var err error
 	for c.Next() {
@@ -51,6 +50,9 @@ func Parse(c *caddy.Controller) (*Kubernetai, error) {
 			return nil, err
 		}
 		k8i.Kubernetes = append(k8i.Kubernetes, k8s)
+	}
+	k8i.p = &podHandler{
+		IsVerifiedCache: make(map[string]podVerified, len(k8i.Kubernetes)),
 	}
 	return k8i, nil
 }

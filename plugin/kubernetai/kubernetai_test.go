@@ -12,11 +12,14 @@ import (
 	"github.com/coredns/coredns/request"
 )
 
+var podip string
+var podCache bool
+
 type k8iPodHandlerTester struct{}
 
-var podip string
+var k8iPodHandlerTest k8iPodHandlerTester
 
-func (k8i *k8iPodHandlerTester) PodWithIP(k kubernetes.Kubernetes, ip string) *object.Pod {
+func (k8i *k8iPodHandlerTester) PodWithIP(k *kubernetes.Kubernetes, ip string) *object.Pod {
 	if ip == "" {
 		return nil
 	}
@@ -27,7 +30,9 @@ func (k8i *k8iPodHandlerTester) PodWithIP(k kubernetes.Kubernetes, ip string) *o
 	return pod
 }
 
-var k8iPodHandlerTest k8iPodHandlerTester
+func (k8i *k8iPodHandlerTester) IsPodVerified(k *kubernetes.Kubernetes) bool {
+	return podCache
+}
 
 type responseWriterTest struct {
 	dns.ResponseWriter
@@ -74,11 +79,12 @@ func TestKubernetai_AutoPath(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   []string
-		ip     string
+		name     string
+		fields   fields
+		args     args
+		want     []string
+		ip       string
+		podCache bool
 	}{
 		{
 			name:   "standard autopath cluster.local",
@@ -93,8 +99,26 @@ func TestKubernetai_AutoPath(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
-			ip:   "172.17.0.7",
+			want:     []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: true,
+		},
+		{
+			name:   "standard autopath with podMode = podModeDisabled on cluster.local",
+			fields: defaultK8iConfig,
+			args: args{
+				state: request.Request{
+					W: w,
+					Req: &dns.Msg{
+						Question: []dns.Question{
+							{Name: "svc-1-a.test-1.svc.cluster.local.", Qtype: 1, Qclass: 1},
+						},
+					},
+				},
+			},
+			want:     []string{"svc.cluster.local.", "cluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: false,
 		},
 		{
 			name:   "standard autopath servicename.svc",
@@ -109,8 +133,26 @@ func TestKubernetai_AutoPath(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
-			ip:   "172.17.0.7",
+			want:     []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: true,
+		},
+		{
+			name:   "standard autopath servicename.svc with podMode = podModeDisabled",
+			fields: defaultK8iConfig,
+			args: args{
+				state: request.Request{
+					W: w,
+					Req: &dns.Msg{
+						Question: []dns.Question{
+							{Name: "svc-2-a.test-2.test-1.svc.cluster.local.", Qtype: 1, Qclass: 1},
+						},
+					},
+				},
+			},
+			want:     []string{"svc.cluster.local.", "cluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: false,
 		},
 		{
 			name:   "standard autopath lookup fluster in cluster.local",
@@ -125,8 +167,26 @@ func TestKubernetai_AutoPath(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
-			ip:   "172.17.0.7",
+			want:     []string{"test-1.svc.cluster.local.", "svc.cluster.local.", "cluster.local.", "test-1.svc.fluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: true,
+		},
+		{
+			name:   "standard autopath lookup fluster in cluster.local with podMode = podModeDisabled",
+			fields: defaultK8iConfig,
+			args: args{
+				state: request.Request{
+					W: w,
+					Req: &dns.Msg{
+						Question: []dns.Question{
+							{Name: "svc-d.test-2.svc.fluster.local.svc.cluster.local.", Qtype: 1, Qclass: 1},
+						},
+					},
+				},
+			},
+			want:     []string{"svc.cluster.local.", "cluster.local.", "svc.fluster.local.", "fluster.local.", ""},
+			ip:       "172.17.0.7",
+			podCache: false,
 		},
 		{
 			name:   "not in zone",
@@ -141,8 +201,9 @@ func TestKubernetai_AutoPath(t *testing.T) {
 					},
 				},
 			},
-			ip:   "172.17.0.7",
-			want: nil,
+			ip:       "172.17.0.7",
+			want:     nil,
+			podCache: true,
 		},
 		{
 			name:   "requesting pod does not exist",
@@ -157,8 +218,26 @@ func TestKubernetai_AutoPath(t *testing.T) {
 					},
 				},
 			},
-			ip:   "",
-			want: nil,
+			ip:       "",
+			want:     nil,
+			podCache: true,
+		},
+		{
+			name:   "AXFR should return nil",
+			fields: defaultK8iConfig,
+			args: args{
+				state: request.Request{
+					W: w,
+					Req: &dns.Msg{
+						Question: []dns.Question{
+							{Name: "zone.local.", Qtype: dns.TypeAXFR, Qclass: 1},
+						},
+					},
+				},
+			},
+			ip:       "",
+			want:     nil,
+			podCache: true,
 		},
 	}
 
@@ -171,6 +250,7 @@ func TestKubernetai_AutoPath(t *testing.T) {
 				autoPathSearch: tt.fields.autoPathSearch,
 				p:              tt.fields.p,
 			}
+			podCache = tt.podCache
 			podip = tt.ip
 			if got := k8i.AutoPath(tt.args.state); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Kubernetai.AutoPath() = %+v, want %+v", got, tt.want)

@@ -30,7 +30,9 @@ type Kubernetai struct {
 func New(zones []string) (Kubernetai, *kubernetes.Kubernetes) {
 	h := Kubernetai{
 		autoPathSearch: searchFromResolvConf(),
-		p:              &podHandler{},
+		p: &podHandler{
+			make(map[string]podVerified, 1),
+		},
 	}
 	k := kubernetes.New(zones)
 	h.Kubernetes = append(h.Kubernetes, k)
@@ -90,8 +92,13 @@ func (k8i Kubernetai) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 }
 
 // AutoPath routes AutoPath requests to the authoritative kubernetes.
-func (k8i Kubernetai) AutoPath(state request.Request) []string {
+func (k8i *Kubernetai) AutoPath(state request.Request) []string {
 	var searchPath []string
+
+	// break quickly on AXFR
+	if state.QType() == dns.TypeAXFR || state.QType() == dns.TypeIXFR {
+		return nil
+	}
 
 	// Abort if zone is not in kubernetai stanza.
 	var zMatch bool
@@ -103,33 +110,45 @@ func (k8i Kubernetai) AutoPath(state request.Request) []string {
 		}
 	}
 	if !zMatch {
+		log.Debugf("unknown kubernetes zone. aborting")
 		return nil
 	}
 
 	// Add autopath result for the handled zones
 	for _, k := range k8i.Kubernetes {
-		pod := k8i.p.PodWithIP(*k, state.IP())
-		if pod == nil {
-			return nil
+		var searchList = []string{
+			"svc.",
+		}
+		if k8i.p.IsPodVerified(k) {
+			pod := k8i.p.PodWithIP(k, state.IP())
+			if pod == nil {
+				return nil
+			}
+			searchList = append([]string{pod.Namespace + ".svc."}, searchList...)
 		}
 
-		search := make([]string, 3)
+		search := make([]string, len(searchList)+1)
 		for _, z := range k.Zones {
-			if z == "." {
-				search[0] = pod.Namespace + ".svc."
-				search[1] = "svc."
-				search[2] = "."
-			} else {
-				search[0] = pod.Namespace + ".svc." + z
-				search[1] = "svc." + z
-				search[2] = z
+			for i, sPath := range searchList {
+				if z == "." {
+					search[i] = sPath
+					if i == len(searchList)-1 {
+						search[i+1] = "."
+					}
+				} else {
+					search[i] = sPath + z
+					if i == len(searchList)-1 {
+						search[i+1] = z
+					}
+				}
 			}
+
 			searchPath = append(search, searchPath...)
 		}
 	}
 	searchPath = append(searchPath, k8i.autoPathSearch...)
 	searchPath = append(searchPath, "")
-	log.Debugf("Autopath search path for '%s' will be '%v'", state.Name(), searchPath)
+	log.Debugf("autopath search path for '%s' will be '%v'", state.Name(), searchPath)
 	return searchPath
 }
 
