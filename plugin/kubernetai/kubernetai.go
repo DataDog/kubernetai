@@ -88,7 +88,11 @@ func (k8i Kubernetai) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 
 		return rcode, err
 	}
-	return plugin.NextOrFailure(k8i.Name(), k8i.Next, ctx, w, r)
+	if k8i.Next != nil {
+		return k8i.Next.ServeDNS(ctx, w, r)
+	}
+
+	return dns.RcodeNameError, err
 }
 
 // AutoPath routes AutoPath requests to the authoritative kubernetes.
